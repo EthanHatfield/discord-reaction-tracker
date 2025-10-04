@@ -28,24 +28,41 @@ class ReactionTracker:
         self.tracking = False
         
     async def track_reaction(self, reactor_id: int, reactee_id: int, message_id: int, 
-                           channel_id: int, emoji: str):
+                           channel_id: int, guild_id: int, emoji: str, timestamp: Optional[datetime] = None):
         """Track a new reaction."""
         await self.db.add_reaction(
             reactor_id=reactor_id,
             reactee_id=reactee_id,
             message_id=message_id,
             channel_id=channel_id,
-            emoji=emoji
+            guild_id=guild_id,
+            emoji=emoji,
+            timestamp=timestamp
         )
 
-    async def scan_channel_history(self, channel: discord.TextChannel, progress_callback=None):
+    async def scan_channel_history(self, channel: discord.TextChannel, guild_id: Optional[int] = None, progress_callback=None):
         """Scan a channel's message history for reactions."""
+        # Strict type checking
+        if not isinstance(channel, discord.TextChannel):
+            print(f"Error: Expected TextChannel object, got {type(channel)} for {channel}")
+            return
+            
+        # Ensure we have a valid guild_id
+        if guild_id is None:
+            if not hasattr(channel, 'guild'):
+                print(f"Error: Channel {channel.name} has no guild attribute")
+                return
+            guild_id = channel.guild.id
+        
         last_message_id = await self.db.get_scan_progress(channel.id)
         retry_count = self.rate_limit_hits[channel.id]
         current_delay = min(self.retry_delay * (2 ** retry_count), self.max_retry_delay)
         
+        # Convert message ID to discord.Object if we have one
+        after_object = discord.Object(id=last_message_id) if last_message_id else None
+        
         try:
-            async for message in channel.history(limit=None, after=last_message_id):
+            async for message in channel.history(limit=None, after=after_object):
                 if not self.scanning:
                     break
                     
@@ -55,13 +72,14 @@ class ReactionTracker:
                             if user.bot:
                                 continue
                                 
-                            await self.db.add_reaction(
-                                reactor_id=user.id,
-                                reactee_id=message.author.id,
-                                message_id=message.id,
-                                channel_id=channel.id,
-                                emoji=str(reaction.emoji),
-                                timestamp=message.created_at
+                            await self.track_reaction(
+                                user.id,
+                                message.author.id,
+                                message.id,
+                                channel.id,
+                                guild_id,
+                                str(reaction.emoji),
+                                message.created_at
                             )
                             
                             # Successful request, reduce retry count
@@ -89,24 +107,50 @@ class ReactionTracker:
 
     async def start_background_scanning(self, guild: discord.Guild):
         """Start the background scanning process."""
+        if not isinstance(guild, discord.Guild):
+            print(f"Error: Expected Guild object, got {type(guild)}")
+            return False
+            
         if self._background_task and not self._background_task.done():
-            return  # Already running
+            return False  # Already running
             
         self.scanning = True
         self._background_task = asyncio.create_task(self._background_scan_loop(guild))
+        return True
         
     async def _background_scan_loop(self, guild: discord.Guild):
         """Continuously scan for reactions in the background."""
         while True:
             try:
-                for channel in guild.text_channels:
+                # Ensure we have a valid guild object
+                if not isinstance(guild, discord.Guild):
+                    print(f"Error: Expected Guild object, got {type(guild)}")
+                    return
+                
+                # Fetch and filter text channels
+                try:
+                    channels = await guild.fetch_channels()
+                    text_channels = [
+                        channel for channel in channels 
+                        if isinstance(channel, discord.TextChannel)
+                    ]
+                except Exception as e:
+                    print(f"Error fetching channels for guild {guild.name}: {e}")
+                    await asyncio.sleep(300)  # Wait 5 minutes before retry
+                    continue
+                
+                # Process each text channel
+                for channel in text_channels:
                     if not self.scanning:
                         return
+                    
+                    if not isinstance(channel, discord.TextChannel):
+                        print(f"Warning: Skipping invalid channel type: {type(channel)}")
+                        continue
                         
                     try:
-                        await self.scan_channel_history(channel)
+                        await self.scan_channel_history(channel, guild.id)
                     except Exception as e:
-                        # Log error but continue with next channel
                         print(f"Error scanning {channel.name}: {e}")
                         continue
                         
@@ -144,17 +188,15 @@ class ReactionTracker:
             "progress": dict(self.scan_progress)
         }
 
-    async def get_report(self, days: Optional[int] = None, emoji: Optional[str] = None) -> str:
+    async def get_report(self, guild_id: int, days: Optional[int] = None, emoji: Optional[str] = None) -> str:
         """Generate a detailed report of reaction statistics."""
         start_time = None
         if days:
             start_time = datetime.now() - timedelta(days=days)
 
         report_lines: List[str] = []
-            
-        report: List[str] = []
 
-        stats = await self.db.get_statistics(start_time=start_time, emoji=emoji)
+        stats = await self.db.get_statistics(guild_id=guild_id, start_time=start_time, emoji=emoji)
         if not stats:
             return "No reactions found for the specified criteria!"
 
@@ -199,14 +241,19 @@ class ReactionTracker:
         )[:5]  # Always show top 5
 
         for i, (user_id, stats) in enumerate(sorted_reactors, 1):
-            top_emojis = sorted(
-                stats["emojis"].items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:3]
-            emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
-            report_lines.append(f"{i}. <@{user_id}>: {stats['given']} reactions given")
-            report_lines.append(f"   Most used: {emoji_str}")
+            if emoji:
+                # When filtering by emoji, just show the count
+                report_lines.append(f"{i}. <@{user_id}>: {stats['given']} {emoji}")
+            else:
+                # Show detailed breakdown only when not filtering by emoji
+                top_emojis = sorted(
+                    stats["emojis"].items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:3]
+                emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
+                report_lines.append(f"{i}. <@{user_id}>: {stats['given']} reactions given")
+                report_lines.append(f"   Most used: {emoji_str}")
             report_lines.append("")
 
         # Top 5 reaction receivers
@@ -218,25 +265,30 @@ class ReactionTracker:
         )[:5]  # Always show top 5
 
         for i, (user_id, stats) in enumerate(sorted_reactees, 1):
-            top_emojis = sorted(
-                stats["emojis"].items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:3]
-            emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
-            report_lines.append(f"{i}. <@{user_id}>: {stats['received']} reactions received")
-            report_lines.append(f"   Most received: {emoji_str}")
+            if emoji:
+                # When filtering by emoji, just show the count
+                report_lines.append(f"{i}. <@{user_id}>: {stats['received']} {emoji}")
+            else:
+                # Show detailed breakdown only when not filtering by emoji
+                top_emojis = sorted(
+                    stats["emojis"].items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:3]
+                emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
+                report_lines.append(f"{i}. <@{user_id}>: {stats['received']} reactions received")
+                report_lines.append(f"   Most received: {emoji_str}")
             report_lines.append("")
 
         return "\n".join(report_lines)
 
-    async def get_emoji_stats(self, days: Optional[int] = None):
+    async def get_emoji_stats(self, guild_id: int, days: Optional[int] = None):
         """Get statistics about emoji usage."""
         start_time = None
         if days:
             start_time = datetime.now() - timedelta(days=days)
 
-        stats = await self.db.get_statistics(start_time=start_time)
+        stats = await self.db.get_statistics(guild_id=guild_id, start_time=start_time)
         
         emoji_stats = defaultdict(int)
         for row in stats:

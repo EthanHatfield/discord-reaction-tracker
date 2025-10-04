@@ -20,6 +20,7 @@ class Database:
                     reactee_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
                     channel_id INTEGER NOT NULL,
+                    guild_id INTEGER NOT NULL,
                     emoji TEXT NOT NULL,
                     is_removed BOOLEAN DEFAULT FALSE
                 )
@@ -38,8 +39,8 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_reactor ON reactions(reactor_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_reactee ON reactions(reactee_id)")
 
-    async def add_reaction(self, reactor_id: int, reactee_id: int, message_id: int, 
-                          channel_id: int, emoji: str, timestamp: Optional[datetime] = None):
+    async def add_reaction(self, reactor_id: int, reactee_id: int, message_id: int,
+                          channel_id: int, guild_id: int, emoji: str, timestamp: Optional[datetime] = None):
         """Add a new reaction to the database."""
         if timestamp is None:
             timestamp = datetime.now()
@@ -47,9 +48,9 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
                 INSERT INTO reactions 
-                (timestamp, reactor_id, reactee_id, message_id, channel_id, emoji)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (timestamp, reactor_id, reactee_id, message_id, channel_id, emoji))
+                (timestamp, reactor_id, reactee_id, message_id, channel_id, guild_id, emoji)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, reactor_id, reactee_id, message_id, channel_id, guild_id, emoji))
             await db.commit()
 
     async def get_reactions(self, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
@@ -92,7 +93,7 @@ class Database:
                 result = await cursor.fetchone()
                 return result[0] if result else None
 
-    async def get_statistics(self, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
+    async def get_statistics(self, guild_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
                            emoji: Optional[str] = None):
         """Get comprehensive reaction statistics."""
         
@@ -103,9 +104,9 @@ class Database:
                 emoji,
                 COUNT(*) as count
             FROM reactions
-            WHERE is_removed = FALSE
+            WHERE is_removed = FALSE AND guild_id = ?
         """
-        params = []
+        params: List[Any] = [guild_id]
 
         if start_time:
             query += " AND timestamp >= ?"

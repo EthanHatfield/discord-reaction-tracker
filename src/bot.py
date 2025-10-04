@@ -14,7 +14,12 @@ intents.message_content = True
 intents.guilds = True  # For server-wide features
 
 # Initialize bot and tracker
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)  # Disable the default help command
+class ReactionBot(commands.Bot):
+    async def setup_hook(self) -> None:
+        # Fetch all guilds to ensure proper cache
+        self.guilds_cache = {guild.id: await guild.fetch_channels() for guild in self.guilds}
+
+bot = ReactionBot(command_prefix="!", intents=intents, help_command=None)  # Disable the default help command
 reaction_tracker = ReactionTracker()
 
 @bot.event
@@ -25,7 +30,19 @@ async def on_ready():
     else:
         print("Bot is ready but user information is not available!")
     print("-------------------")
+    
+    # Start scanning in all guilds
+    for guild in bot.guilds:
+        print(f"Starting scan in guild: {guild.name}")
+        await reaction_tracker.start_background_scanning(guild)
+    
     await bot.change_presence(activity=discord.Game(name="tracking reactions | !help"))
+
+@bot.event
+async def on_guild_join(guild):
+    """Automatically start scanning when joining a new server."""
+    print(f"Joined new guild: {guild.name}")
+    await reaction_tracker.start_background_scanning(guild)
 
 @bot.event
 async def on_reaction_add(reaction, user):
@@ -35,11 +52,12 @@ async def on_reaction_add(reaction, user):
     
     message = reaction.message
     await reaction_tracker.track_reaction(
-        reactor_id=user.id,
-        reactee_id=message.author.id,
-        message_id=message.id,
-        channel_id=message.channel.id,
-        emoji=str(reaction.emoji)
+        user.id,
+        message.author.id,
+        message.id,
+        message.channel.id,
+        message.guild.id,
+        str(reaction.emoji)
     )
 
 @bot.event
@@ -145,10 +163,12 @@ async def scan_status(ctx):
 async def report(ctx, days: Optional[int] = 30, emoji: Optional[str] = None):
     """Generate a detailed report of reactions."""
     
-    # If no emoji specified, default to cat with tears of joy
+    # Get the guild_id from the context
+    guild_id = ctx.guild.id
+
+    # Process emoji parameter
     if emoji is None:
         emoji = "😹"  # Default to cat with tears of joy emoji
-    # If 'all' specified, show all emojis
     elif emoji.lower() == "all":
         emoji = None
     elif emoji.startswith("<") and emoji.endswith(">"):
@@ -166,7 +186,7 @@ async def report(ctx, days: Optional[int] = 30, emoji: Optional[str] = None):
         # Keep original if no mapping found
     
     # Get the report
-    report_text = await reaction_tracker.get_report(days, emoji)
+    report_text = await reaction_tracker.get_report(guild_id=ctx.guild.id, days=days, emoji=emoji)
     
     # Split long messages if needed
     if len(report_text) > 2000:
@@ -179,7 +199,7 @@ async def report(ctx, days: Optional[int] = 30, emoji: Optional[str] = None):
 @bot.command(name="emoji_stats")
 async def emoji_stats(ctx, days: Optional[int] = 30):
     """Show statistics about emoji usage."""
-    stats = await reaction_tracker.get_emoji_stats(days)
+    stats = await reaction_tracker.get_emoji_stats(ctx.guild.id, days)
     
     if not stats:
         await ctx.send("No emoji statistics available for the specified timeframe!")
@@ -279,7 +299,7 @@ async def status(ctx):
 @commands.is_owner()  # Only bot owner can use this command
 async def debug_db(ctx):
     """Debug command to check database contents."""
-    stats = await reaction_tracker.db.get_statistics()  # Get all reactions
+    stats = await reaction_tracker.db.get_statistics(guild_id=ctx.guild.id)  # Get all reactions for this guild
     stats_list = list(stats)  # Convert to list for counting
     
     if not stats_list:
@@ -316,5 +336,19 @@ async def debug_db(ctx):
 # Run the bot
 if __name__ == "__main__":
     if not config.TOKEN:
-        raise ValueError("Bot token not found. Please set the DISCORD_TOKEN environment variable.")
-    bot.run(config.TOKEN)
+        print("❌ Error: Bot token not found!")
+        print("Please create a .env file with your DISCORD_BOT_TOKEN")
+        print("Example: DISCORD_BOT_TOKEN=your_token_here")
+        raise ValueError("Bot token not found. Please set the DISCORD_BOT_TOKEN environment variable in .env file.")
+    
+    print("🚀 Starting Discord Reaction Tracker Bot...")
+    print(f"📁 Database location: reactions.db")
+    print(f"⏰ Reaction timeframe: {config.REACTION_TIMEFRAME} seconds")
+    
+    try:
+        bot.run(config.TOKEN)
+    except discord.LoginFailure:
+        print("❌ Error: Invalid bot token. Please check your DISCORD_BOT_TOKEN in .env file.")
+    except Exception as e:
+        print(f"❌ Error starting bot: {e}")
+        raise
