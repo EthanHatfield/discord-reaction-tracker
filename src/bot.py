@@ -21,6 +21,12 @@ class ReactionBot(commands.Bot):
         try:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} slash command(s)")
+            
+            # Debug: Print guild information
+            print("Bot is connected to the following guilds:")
+            for guild in self.guilds:
+                print(f"  - {guild.name} (ID: {guild.id})")
+                
         except Exception as e:
             print(f"Failed to sync commands: {e}")
 
@@ -77,53 +83,87 @@ async def on_command_error(ctx, error):
         print(f"Command error: {error}")
         traceback.print_exception(type(error), error, error.__traceback__)
 
+# Global slash command error handler
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Handle slash command errors."""
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(f"❌ An error occurred: {str(error)}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ An error occurred: {str(error)}", ephemeral=True)
+    except:
+        pass
+    
+    print(f"Slash command error: {error}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+
+# Simple test command
+@bot.tree.command(name="ping", description="Test if the bot is responding")
+async def ping_slash(interaction: discord.Interaction):
+    """Simple ping command to test responsiveness."""
+    try:
+        await interaction.response.send_message("🏓 Pong! Bot is working correctly.", ephemeral=True)
+    except Exception as e:
+        print(f"Error in ping command: {e}")
+
 # Slash Commands
 @bot.tree.command(name="help", description="Show help information about bot commands")
 async def show_help_slash(interaction: discord.Interaction):
     """Show help message."""
-    embed = discord.Embed(
-        title="🔧 Reaction Tracker Commands",
-        description="Use these slash commands to interact with the bot:",
-        color=discord.Color.blue()
-    )
-    embed.add_field(
-        name="📊 Main Commands",
-        value="`/report [days] [emoji]` - Get reaction statistics\n`/scan` - Start scanning message history\n`/emoji_stats [days]` - Show emoji usage statistics",
-        inline=False
-    )
-    embed.add_field(
-        name="⚙️ Control Commands", 
-        value="`/start` - Start tracking\n`/stop` - Stop tracking\n`/status` - Check status",
-        inline=False
-    )
-    embed.add_field(
-        name="🌟 Examples",
-        value="`/report` - Last 30 days of 😹 reactions\n`/report days:7 emoji:all` - All reactions from last week",
-        inline=False
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        embed = discord.Embed(
+            title="🔧 Reaction Tracker Commands",
+            description="Use these slash commands to interact with the bot:",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="📊 Main Commands",
+            value="`/report [days] [emoji]` - Get reaction statistics\n`/scan` - Start scanning message history\n`/emoji_stats [days]` - Show emoji usage statistics",
+            inline=False
+        )
+        embed.add_field(
+            name="⚙️ Control Commands", 
+            value="`/start` - Start tracking\n`/stop` - Stop tracking\n`/status` - Check status",
+            inline=False
+        )
+        embed.add_field(
+            name="🌟 Examples",
+            value="`/report` - Last 30 days of reactions\n`/report days:7` - All reactions from last week",
+            inline=False
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception as e:
+        print(f"Error in help command: {e}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Error displaying help", ephemeral=True)
 
 @bot.tree.command(name="scan", description="Start scanning message history for reactions")
 async def scan_history_slash(interaction: discord.Interaction):
     """Start scanning message history for reactions."""
-    if not interaction.guild:
-        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
-        return
-        
-    started = await reaction_tracker.start_scanning(interaction.guild)
-    if started:
-        embed = discord.Embed(
-            title="📊 Scanning Started",
-            description="Started scanning message history for reactions. This may take a while.",
-            color=discord.Color.blue()
-        )
-    else:
-        embed = discord.Embed(
-            title="⚠️ Scanning Already in Progress",
-            description="A scan is already running. Use `/scan_status` to check progress.",
-            color=discord.Color.orange()
-        )
-    await interaction.response.send_message(embed=embed)
+    try:
+        if not interaction.guild:
+            await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+            return
+            
+        started = await reaction_tracker.start_scanning(interaction.guild)
+        if started:
+            embed = discord.Embed(
+                title="📊 Scanning Started",
+                description="Started scanning message history for reactions. This may take a while.",
+                color=discord.Color.blue()
+            )
+        else:
+            embed = discord.Embed(
+                title="⚠️ Scanning Already in Progress",
+                description="A scan is already running. Use `/scan_status` to check progress.",
+                color=discord.Color.orange()
+            )
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        print(f"Error in scan command: {e}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Error starting scan", ephemeral=True)
 
 @bot.tree.command(name="scan_status", description="Check scanning progress")
 async def scan_status_slash(interaction: discord.Interaction):
