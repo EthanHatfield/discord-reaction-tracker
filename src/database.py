@@ -1,6 +1,7 @@
 import sqlite3
 import aiosqlite
 from datetime import datetime
+from typing import Optional, List, Dict, Any
 import os
 
 class Database:
@@ -38,7 +39,7 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_reactee ON reactions(reactee_id)")
 
     async def add_reaction(self, reactor_id: int, reactee_id: int, message_id: int, 
-                          channel_id: int, emoji: str, timestamp: datetime = None):
+                          channel_id: int, emoji: str, timestamp: Optional[datetime] = None):
         """Add a new reaction to the database."""
         if timestamp is None:
             timestamp = datetime.now()
@@ -51,8 +52,8 @@ class Database:
             """, (timestamp, reactor_id, reactee_id, message_id, channel_id, emoji))
             await db.commit()
 
-    async def get_reactions(self, start_time: datetime = None, end_time: datetime = None, 
-                          emoji: str = None):
+    async def get_reactions(self, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
+                          emoji: Optional[str] = None):
         """Get reactions within a time range and/or for a specific emoji."""
         query = "SELECT * FROM reactions WHERE is_removed = FALSE"
         params = []
@@ -91,9 +92,10 @@ class Database:
                 result = await cursor.fetchone()
                 return result[0] if result else None
 
-    async def get_statistics(self, start_time: datetime = None, end_time: datetime = None,
-                           emoji: str = None):
+    async def get_statistics(self, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
+                           emoji: Optional[str] = None):
         """Get comprehensive reaction statistics."""
+        
         query = """
             SELECT 
                 reactor_id,
@@ -116,6 +118,7 @@ class Database:
             params.append(emoji)
 
         query += " GROUP BY reactor_id, reactee_id, emoji"
+        
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = sqlite3.Row

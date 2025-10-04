@@ -25,7 +25,15 @@ This project is a Discord bot that tracks the number of reactions each user earn
 
 ## Configuration
 
-Before running the bot, you need to set up your configuration. Open `src/config.py` and add your Discord bot token and any other necessary parameters.
+1. Copy the `.env.example` file to `.env`:
+   ```
+   cp .env.example .env
+   ```
+2. Edit the `.env` file and add your Discord bot token and other configuration values.
+3. The following environment variables are supported:
+   - `DISCORD_BOT_TOKEN` (required): Your Discord bot token
+   - `REACTION_TIMEFRAME` (optional): Timeframe in seconds for tracking reactions (default: 3600)
+   - `LOG_CHANNEL_ID` (optional): Channel ID for logging
 
 ## Usage
 
