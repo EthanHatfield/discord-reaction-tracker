@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from collections import defaultdict
-from typing import Optional, Dict, List, Tuple, Any, DefaultDict
+from typing import Optional, Dict, List, Any, DefaultDict
 import asyncio
 import discord
 from database import Database
@@ -18,6 +18,11 @@ class ReactionTracker:
         self.max_retry_delay = 3600  # Maximum retry delay (1 hour)
         self.rate_limit_hits: DefaultDict[int, int] = defaultdict(int)  # Track rate limit hits per channel
         self._background_task: Optional[asyncio.Task] = None
+        # Use configurable delays
+        self.base_delay = config.MESSAGE_DELAY  # Base delay between messages
+        self.reaction_delay = config.REACTION_DELAY  # Delay between processing each reaction
+        self.channel_delay = config.CHANNEL_DELAY  # Delay between processing channels
+        self.min_rate_limit_delay = config.MIN_RATE_LIMIT_DELAY  # Minimum rate limit delay
         
     def start_tracking(self) -> None:
         """Start tracking reactions."""
@@ -66,8 +71,14 @@ class ReactionTracker:
                 if not self.scanning:
                     break
                     
+                # Add base delay between processing messages
+                await asyncio.sleep(self.base_delay)
+                    
                 for reaction in message.reactions:
                     try:
+                        # Add delay before fetching reaction users
+                        await asyncio.sleep(self.reaction_delay)
+                        
                         async for user in reaction.users():
                             if user.bot:
                                 continue
@@ -82,18 +93,19 @@ class ReactionTracker:
                                 message.created_at
                             )
                             
-                            # Successful request, reduce retry count
-                            if retry_count > 0:
-                                self.rate_limit_hits[channel.id] = max(0, retry_count - 1)
-                            
-                            # Dynamic rate limit handling
-                            await asyncio.sleep(0.1 * (2 ** retry_count))
+                            # Successful request, reduce retry count gradually
+                            if self.rate_limit_hits[channel.id] > 0:
+                                self.rate_limit_hits[channel.id] = max(0, self.rate_limit_hits[channel.id] - 1)
                             
                     except discord.errors.HTTPException as e:
                         if e.code == 429:  # Rate limit hit
+                            print(f"Rate limit hit for channel {channel.name}, increasing delay...")
                             self.rate_limit_hits[channel.id] += 1
                             retry_count = self.rate_limit_hits[channel.id]
-                            await asyncio.sleep(current_delay)
+                            # Calculate exponential backoff with reasonable minimum
+                            delay = max(self.min_rate_limit_delay, min(self.min_rate_limit_delay * (2 ** retry_count), self.max_retry_delay))
+                            print(f"Waiting {delay} seconds before retrying...")
+                            await asyncio.sleep(delay)
                             continue
                         raise
                 
@@ -150,6 +162,8 @@ class ReactionTracker:
                         
                     try:
                         await self.scan_channel_history(channel, guild.id)
+                        # Add configurable delay between channels to prevent overwhelming the API
+                        await asyncio.sleep(self.channel_delay)
                     except Exception as e:
                         print(f"Error scanning {channel.name}: {e}")
                         continue

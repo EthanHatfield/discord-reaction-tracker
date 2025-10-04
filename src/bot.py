@@ -1,5 +1,6 @@
-﻿import discord
+import discord
 from discord.ext import commands
+from discord import app_commands
 import traceback
 from datetime import datetime
 from typing import Optional
@@ -11,15 +12,19 @@ intents = discord.Intents.default()
 intents.reactions = True
 intents.messages = True
 intents.message_content = True
-intents.guilds = True  # For server-wide features
+intents.guilds = True
 
-# Initialize bot and tracker
+# Bot class with slash command support
 class ReactionBot(commands.Bot):
     async def setup_hook(self) -> None:
-        # Fetch all guilds to ensure proper cache
         self.guilds_cache = {guild.id: await guild.fetch_channels() for guild in self.guilds}
+        try:
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} slash command(s)")
+        except Exception as e:
+            print(f"Failed to sync commands: {e}")
 
-bot = ReactionBot(command_prefix="!", intents=intents, help_command=None)  # Disable the default help command
+bot = ReactionBot(command_prefix="$", intents=intents, help_command=None)  # Use uncommon prefix to avoid conflicts
 reaction_tracker = ReactionTracker()
 
 @bot.event
@@ -31,12 +36,11 @@ async def on_ready():
         print("Bot is ready but user information is not available!")
     print("-------------------")
     
-    # Start scanning in all guilds
     for guild in bot.guilds:
         print(f"Starting scan in guild: {guild.name}")
         await reaction_tracker.start_background_scanning(guild)
     
-    await bot.change_presence(activity=discord.Game(name="tracking reactions | !help"))
+    await bot.change_presence(activity=discord.Game(name="tracking reactions | /help"))
 
 @bot.event
 async def on_guild_join(guild):
@@ -62,67 +66,87 @@ async def on_reaction_add(reaction, user):
 
 @bot.event
 async def on_command_error(ctx, error):
-    """Handle command errors."""
-    if isinstance(error, commands.errors.CheckFailure):
-        await ctx.send(" You dont have permission to use this command.")
-    elif isinstance(error, commands.errors.CommandNotFound):
-        await ctx.send(" Unknown command. Use !help to see available commands.")
-    elif isinstance(error, commands.errors.MissingRequiredArgument):
-        await ctx.send(" Missing required argument. Use !help to see command usage.")
-    elif isinstance(error, commands.errors.BadArgument):
-        await ctx.send(" Invalid argument provided. Use !help to see command usage.")
-    else:
-        print(f"Error: {error}")
+    """Handle command errors - we only use slash commands now, so ignore prefix command errors."""
+    # Since we only use slash commands, silently ignore all prefix command errors
+    if isinstance(error, commands.errors.CommandNotFound):
+        # Don't respond to unknown prefix commands
+        return
+    
+    # Log other errors but don't respond to user
+    if not isinstance(error, (commands.errors.CheckFailure, commands.errors.MissingRequiredArgument, commands.errors.BadArgument)):
+        print(f"Command error: {error}")
         traceback.print_exception(type(error), error, error.__traceback__)
-        await ctx.send(" An error occurred while executing the command.")
 
-@bot.command(name="scan")
-async def scan_history(ctx):
+# Slash Commands
+@bot.tree.command(name="help", description="Show help information about bot commands")
+async def show_help_slash(interaction: discord.Interaction):
+    """Show help message."""
+    embed = discord.Embed(
+        title="🔧 Reaction Tracker Commands",
+        description="Use these slash commands to interact with the bot:",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="📊 Main Commands",
+        value="`/report [days] [emoji]` - Get reaction statistics\n`/scan` - Start scanning message history\n`/emoji_stats [days]` - Show emoji usage statistics",
+        inline=False
+    )
+    embed.add_field(
+        name="⚙️ Control Commands", 
+        value="`/start` - Start tracking\n`/stop` - Stop tracking\n`/status` - Check status",
+        inline=False
+    )
+    embed.add_field(
+        name="🌟 Examples",
+        value="`/report` - Last 30 days of 😹 reactions\n`/report days:7 emoji:all` - All reactions from last week",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="scan", description="Start scanning message history for reactions")
+async def scan_history_slash(interaction: discord.Interaction):
     """Start scanning message history for reactions."""
-    started = await reaction_tracker.start_scanning(ctx.guild)
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
+    started = await reaction_tracker.start_scanning(interaction.guild)
     if started:
         embed = discord.Embed(
-            title=" Scanning Started",
+            title="📊 Scanning Started",
             description="Started scanning message history for reactions. This may take a while.",
             color=discord.Color.blue()
         )
     else:
         embed = discord.Embed(
-            title=" Scanning Already in Progress",
-            description="A scan is already running. Use !scan_status to check progress.",
+            title="⚠️ Scanning Already in Progress",
+            description="A scan is already running. Use `/scan_status` to check progress.",
             color=discord.Color.orange()
         )
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="scan_stop")
-async def stop_scanning(ctx):
-    """Stop the scanning process."""
-    await reaction_tracker.stop_scanning()
-    embed = discord.Embed(
-        title=" Scanning Stopped",
-        description="Stopped scanning message history.",
-        color=discord.Color.red()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="scan_status")
-async def scan_status(ctx):
+@bot.tree.command(name="scan_status", description="Check scanning progress")
+async def scan_status_slash(interaction: discord.Interaction):
     """Check scanning progress."""
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
     status = reaction_tracker.get_scan_status()
     if status["scanning"]:
         embed = discord.Embed(
-            title=" Scanning in Progress",
+            title="📊 Scanning in Progress",
             description="Currently loading message history for reaction tracking.\nThis may take a while depending on server size.",
             color=discord.Color.blue()
         )
         
         channels_added = False
         for channel_id, last_message_id in status["progress"].items():
-            channel = ctx.guild.get_channel(channel_id)
+            channel = interaction.guild.get_channel(channel_id)
             if channel:
                 channels_added = True
                 embed.add_field(
-                    name=f" {channel.name}",
+                    name=f"📝 {channel.name}",
                     value=f"Processing messages...\nLast message scanned: {last_message_id}",
                     inline=False
                 )
@@ -134,176 +158,144 @@ async def scan_status(ctx):
                 inline=False
             )
             
-        embed.set_footer(text="Use !scan_stop to cancel the scan")
+        embed.set_footer(text="Use /scan_stop to cancel the scan")
     else:
         embed = discord.Embed(
-            title=" Scanner Status",
-            description="No scan is currently running.\n\nUse `!scan` to start loading message history for:\n Past reactions\n Message history\n Reaction statistics",
+            title="📊 Scanner Status",
+            description="No scan is currently running.\n\nUse `/scan` to start loading message history for:\n✅ Past reactions\n✅ Message history\n✅ Reaction statistics",
             color=discord.Color.greyple()
         )
         
         if status["progress"]:
             embed.add_field(
                 name="Last Scan Progress",
-                value="Previous scan data is available. You can start a new scan with `!scan` if needed.",
+                value="Previous scan data is available. You can start a new scan with `/scan` if needed.",
                 inline=False
             )
         else:
             embed.add_field(
                 name="Getting Started",
-                value="Run `!scan` to start tracking reactions in this server!",
+                value="Run `/scan` to start tracking reactions in this server!",
                 inline=False
             )
             
         embed.set_footer(text="Tip: Scanning is only needed once when the bot joins or if you want to reload history")
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="report")
-async def report(ctx, days: Optional[int] = 30, emoji: Optional[str] = None):
+@bot.tree.command(name="scan_stop", description="Stop the scanning process")
+async def stop_scanning_slash(interaction: discord.Interaction):
+    """Stop the scanning process."""
+    await reaction_tracker.stop_scanning()
+    embed = discord.Embed(
+        title="🛑 Scanning Stopped",
+        description="Stopped scanning message history.",
+        color=discord.Color.red()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="report", description="Generate a detailed report of reactions")
+@app_commands.describe(
+    days="Number of days to look back (default: 30)",
+    emoji="Emoji to filter by (default: 😹, use 'all' for all emojis)"
+)
+async def report_slash(interaction: discord.Interaction, days: Optional[int] = 30, emoji: Optional[str] = None):
     """Generate a detailed report of reactions."""
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
     
-    # Get the guild_id from the context
-    guild_id = ctx.guild.id
-
     # Process emoji parameter
     if emoji is None:
-        emoji = "😹"  # Default to cat with tears of joy emoji
+        emoji = "😹"
     elif emoji.lower() == "all":
         emoji = None
-    elif emoji.startswith("<") and emoji.endswith(">"):
-        # This is a custom emoji, keep as is
-        pass
-    elif emoji.startswith(":") and emoji.endswith(":"):
-        # Handle Discord emoji name format
-        emoji_name = emoji.lower()
-        if emoji_name in [":joy_cat:", ":cat:", ":joycat:", ":smiley_cat:"]:
-            emoji = "😹"  # Cat with tears of joy emoji
-        elif emoji_name == ":heart:":
-            emoji = "❤️"
-        elif emoji_name == ":thumbsup:":
-            emoji = "👍"
-        # Keep original if no mapping found
     
-    # Get the report
-    report_text = await reaction_tracker.get_report(guild_id=ctx.guild.id, days=days, emoji=emoji)
+    report_text = await reaction_tracker.get_report(guild_id=interaction.guild.id, days=days, emoji=emoji)
     
-    # Split long messages if needed
     if len(report_text) > 2000:
         parts = [report_text[i:i+1900] for i in range(0, len(report_text), 1900)]
-        for i, part in enumerate(parts, 1):
-            await ctx.send(f"{part}\n(Part {i}/{len(parts)})")
+        await interaction.response.send_message(f"{parts[0]}\n(Part 1/{len(parts)})")
+        for i, part in enumerate(parts[1:], 2):
+            await interaction.followup.send(f"{part}\n(Part {i}/{len(parts)})")
     else:
-        await ctx.send(report_text)
+        await interaction.response.send_message(report_text)
 
-@bot.command(name="emoji_stats")
-async def emoji_stats(ctx, days: Optional[int] = 30):
+@bot.tree.command(name="emoji_stats", description="Show statistics about emoji usage")
+@app_commands.describe(days="Number of days to look back (default: 30)")
+async def emoji_stats_slash(interaction: discord.Interaction, days: Optional[int] = 30):
     """Show statistics about emoji usage."""
-    stats = await reaction_tracker.get_emoji_stats(ctx.guild.id, days)
-    
-    if not stats:
-        await ctx.send("No emoji statistics available for the specified timeframe!")
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
         return
         
-    report = [" **Most Used Emojis**"]
+    stats = await reaction_tracker.get_emoji_stats(interaction.guild.id, days)
+    
+    if not stats:
+        await interaction.response.send_message("No emoji statistics available for the specified timeframe!")
+        return
+        
+    report = ["📊 **Most Used Emojis**"]
     if days:
         report.append(f"Time period: Last {days} days\n")
         
-    for emoji, count in list(stats.items())[:10]:  # Show top 10
+    for emoji, count in list(stats.items())[:10]:
         report.append(f"{emoji}: {count} uses")
         
-    await ctx.send("\n".join(report))
+    await interaction.response.send_message("\n".join(report))
 
-@bot.command(name="help")
-async def show_help(ctx):
-    """Show help message."""
-    commands_list = [
-        "** Reaction Tracker Commands**",
-        "\n**Main Commands:**",
-        "`!report [days] [emoji]` - Get reaction statistics",
-        "   `days` (optional): Number of days to look back (default: 30)",
-        "   `emoji` (optional): Filter by emoji type (default: 😹)",
-        "`!emoji_stats [days]` - Show most used emojis",
-        "   `days` (optional): Number of days to look back (default: 30)",
-        "\n**Report Options:**",
-        " Default: Shows 😹 reactions from last 30 days",
-        "  `!report`  Last 30 days of cat reactions",
-        "  `!report 7`  Last week's cat reactions",
-        "\n All Emojis: Use the 'all' keyword",
-        "  `!report 30 all`  All reactions from last month",
-        "  `!report 7 all`  All reactions from last week",
-        "\n Specific Emoji: Several formats supported",
-        "  `!report 30 👍`  Standard emoji",
-        "  `!report 7 😹`  Cat emoji",
-        "  `!report 7 ❤️`  Heart emoji",
-        "  `!report 7 :custom:`  Custom server emoji",
-        "\n**Examples:**",
-        "`!report`  Last 30 days of cat reactions",
-        "`!report 90 all`  All reactions from last 3 months",
-        "`!emoji_stats`  Top 10 emojis from last 30 days",
-        "`!emoji_stats 7`  Last week's most used emojis"
-    ]
-    
-    try:
-        # Send help message as DM
-        await ctx.author.send("\n".join(commands_list))
-        # Send acknowledgment in channel
-        embed = discord.Embed(
-            description=" I've sent you a DM with the help information!",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
-    except discord.Forbidden:
-        # If user has DMs disabled
-        embed = discord.Embed(
-            title=" Cannot send DM",
-            description="I couldn't send you a DM. Please enable direct messages from server members and try again.",
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-
-@bot.command(name="start")
-async def start_tracking(ctx):
+@bot.tree.command(name="start", description="Start tracking reactions")
+async def start_tracking_slash(interaction: discord.Interaction):
     """Start tracking reactions."""
     reaction_tracker.start_tracking()
     embed = discord.Embed(
-        title=" Tracking Started",
+        title="✅ Tracking Started",
         description="Now tracking all reactions in this server!",
         color=discord.Color.green()
     )
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="stop")
-async def stop_tracking(ctx):
+@bot.tree.command(name="stop", description="Stop tracking reactions")
+async def stop_tracking_slash(interaction: discord.Interaction):
     """Stop tracking reactions."""
     reaction_tracker.stop_tracking()
     embed = discord.Embed(
-        title=" Tracking Stopped",
+        title="🛑 Tracking Stopped",
         description="Reaction tracking has been stopped.",
         color=discord.Color.red()
     )
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="status")
-async def status(ctx):
+@bot.tree.command(name="status", description="Check tracking status")
+async def status_slash(interaction: discord.Interaction):
     """Check tracking status."""
-    status = " Active" if reaction_tracker.tracking else " Inactive"
+    status = "✅ Active" if reaction_tracker.tracking else "❌ Inactive"
     embed = discord.Embed(
         title="Tracking Status",
         description=status,
         color=discord.Color.green() if reaction_tracker.tracking else discord.Color.red()
     )
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="debug_db")
-@commands.is_owner()  # Only bot owner can use this command
-async def debug_db(ctx):
+@bot.tree.command(name="debug_db", description="[Owner only] Debug command to check database contents")
+@app_commands.default_permissions(administrator=True)
+async def debug_db_slash(interaction: discord.Interaction):
     """Debug command to check database contents."""
-    stats = await reaction_tracker.db.get_statistics(guild_id=ctx.guild.id)  # Get all reactions for this guild
-    stats_list = list(stats)  # Convert to list for counting
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
+    # Check if user is bot owner
+    app_info = await bot.application_info()
+    if interaction.user.id != app_info.owner.id:
+        await interaction.response.send_message("❌ This command is only available to the bot owner.", ephemeral=True)
+        return
+    
+    stats = await reaction_tracker.db.get_statistics(guild_id=interaction.guild.id)
+    stats_list = list(stats)
     
     if not stats_list:
-        await ctx.send("No reactions found in database!")
+        await interaction.response.send_message("No reactions found in database!", ephemeral=True)
         return
         
     unique_emojis = set()
@@ -315,7 +307,7 @@ async def debug_db(ctx):
         unique_users.add(reaction["reactee_id"])
     
     overview = [
-        "** Database Overview**",
+        "📋 **Database Overview**",
         f"Total reactions: {len(stats_list)}",
         f"Unique emojis: {len(unique_emojis)}",
         f"Users involved: {len(unique_users)}\n",
@@ -331,7 +323,7 @@ async def debug_db(ctx):
     for emoji, count in sorted_emojis:
         overview.append(f"{emoji}: {count}")
     
-    await ctx.send("\n".join(overview))
+    await interaction.response.send_message("\n".join(overview), ephemeral=True)
 
 # Run the bot
 if __name__ == "__main__":

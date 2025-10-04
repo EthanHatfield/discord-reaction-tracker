@@ -1,14 +1,33 @@
 # Discord Reaction Tracker
 
-This project is a Discord bot that tracks the number of reactions each user earns within a specified timeframe. It provides an easy way to monitor user engagement through reactions in Discord channels.
+A Discord bot that tracks and analyzes user reactions across server channels using modern slash commands. Monitor user engagement, generate detailed reports, and gain insights into your community's reaction patterns.
 
-## Features
+## ✨ Features
 
-- Tracks user reactions to messages in real-time.
-- Allows configuration of the tracking timeframe.
-- Provides a summary of reactions earned by each user.
+- **Real-time Reaction Tracking**: Automatically tracks reactions on messages
+- **Historical Scanning**: Scan existing message history for past reactions  
+- **Slash Commands**: Modern Discord slash command interface
+- **Detailed Reports**: Generate comprehensive reaction statistics
+- **Emoji Analytics**: Track most popular emojis and usage patterns
+- **Configurable Rate Limiting**: Optimized for Discord's API limits
+- **Persistent Storage**: SQLite database for reliable data storage
 
-## Installation
+## 📋 Commands
+
+All commands use Discord's slash command interface (`/`):
+
+- `/scan` - Start scanning message history for reactions
+- `/scan_stop` - Stop the scanning process
+- `/scan_status` - Check scanning progress
+- `/report [days] [emoji]` - Generate detailed reaction reports
+- `/emoji_stats [days]` - Show emoji usage statistics  
+- `/help` - Show command information
+- `/start` - Start tracking reactions
+- `/stop` - Stop tracking reactions
+- `/status` - Check tracking status
+- `/debug_db` - Show database statistics
+
+## 🚀 Installation
 
 1. Clone the repository:
    ```
@@ -34,15 +53,31 @@ This project is a Discord bot that tracks the number of reactions each user earn
    - `DISCORD_BOT_TOKEN` (required): Your Discord bot token
    - `REACTION_TIMEFRAME` (optional): Timeframe in seconds for tracking reactions (default: 3600)
    - `LOG_CHANNEL_ID` (optional): Channel ID for logging
+   - `MESSAGE_DELAY` (optional): Delay between processing messages in seconds (default: 1.0)
+   - `REACTION_DELAY` (optional): Delay between processing reactions in seconds (default: 0.5)
+   - `CHANNEL_DELAY` (optional): Delay between processing channels in seconds (default: 5.0)
+   - `MIN_RATE_LIMIT_DELAY` (optional): Minimum delay when rate limited in seconds (default: 5.0)
 
-## Usage
+## 🔧 Usage
 
 To run the bot, execute the following command:
-```
+```bash
 python src/bot.py
 ```
 
-Make sure your bot has the necessary permissions to read messages and manage reactions in the channels you want to track.
+The bot will automatically:
+1. Connect to Discord using your bot token
+2. Register slash commands with all servers the bot is in
+3. Start tracking reactions in real-time
+4. Begin scanning historical messages (if `/scan` is used)
+
+## 🤖 Bot Permissions
+
+Ensure your bot has these permissions:
+- Read Messages/View Channels
+- Use Slash Commands  
+- Read Message History
+- Add Reactions (optional, for testing)
 
 ## Contributing
 
