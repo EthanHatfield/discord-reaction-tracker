@@ -251,7 +251,7 @@ async def report_slash(interaction: discord.Interaction, days: Optional[int] = 3
     elif emoji.lower() == "all":
         emoji = None
     
-    report_text = await reaction_tracker.get_report(guild_id=interaction.guild.id, days=days, emoji=emoji)
+    report_text = await reaction_tracker.get_report(guild_id=interaction.guild.id, days=days, emoji=emoji, guild=interaction.guild, bot=bot)
     
     if len(report_text) > 2000:
         parts = [report_text[i:i+1900] for i in range(0, len(report_text), 1900)]

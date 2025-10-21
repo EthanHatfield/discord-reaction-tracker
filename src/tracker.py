@@ -202,11 +202,28 @@ class ReactionTracker:
             "progress": dict(self.scan_progress)
         }
 
-    async def get_report(self, guild_id: int, days: Optional[int] = None, emoji: Optional[str] = None) -> str:
+    async def get_report(self, guild_id: int, days: Optional[int] = None, emoji: Optional[str] = None, guild=None, bot=None) -> str:
         """Generate a detailed report of reaction statistics."""
         start_time = None
         if days:
             start_time = datetime.now() - timedelta(days=days)
+        
+        async def get_username(user_id: int) -> str:
+            """Helper function to get username or fallback to ID."""
+            if guild:
+                # First try to get guild member (for display name)
+                member = guild.get_member(user_id)
+                if member:
+                    return member.display_name
+                
+                # If not a member, try to fetch user from Discord
+                if bot:
+                    try:
+                        user = await bot.fetch_user(user_id)
+                        return user.display_name if user.display_name else user.name
+                    except:
+                        pass
+            return f"User#{user_id}"
 
         report_lines: List[str] = []
 
@@ -255,9 +272,10 @@ class ReactionTracker:
         )[:5]  # Always show top 5
 
         for i, (user_id, stats) in enumerate(sorted_reactors, 1):
+            username = await get_username(user_id)
             if emoji:
                 # When filtering by emoji, just show the count
-                report_lines.append(f"{i}. <@{user_id}>: {stats['given']} {emoji}")
+                report_lines.append(f"{i}. {username}: {stats['given']} {emoji}")
             else:
                 # Show detailed breakdown only when not filtering by emoji
                 top_emojis = sorted(
@@ -266,7 +284,7 @@ class ReactionTracker:
                     reverse=True
                 )[:3]
                 emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
-                report_lines.append(f"{i}. <@{user_id}>: {stats['given']} reactions given")
+                report_lines.append(f"{i}. {username}: {stats['given']} reactions given")
                 report_lines.append(f"   Most used: {emoji_str}")
             report_lines.append("")
 
@@ -279,9 +297,10 @@ class ReactionTracker:
         )[:5]  # Always show top 5
 
         for i, (user_id, stats) in enumerate(sorted_reactees, 1):
+            username = await get_username(user_id)
             if emoji:
                 # When filtering by emoji, just show the count
-                report_lines.append(f"{i}. <@{user_id}>: {stats['received']} {emoji}")
+                report_lines.append(f"{i}. {username}: {stats['received']} {emoji}")
             else:
                 # Show detailed breakdown only when not filtering by emoji
                 top_emojis = sorted(
@@ -290,7 +309,7 @@ class ReactionTracker:
                     reverse=True
                 )[:3]
                 emoji_str = " ".join(f"{emoji}({count})" for emoji, count in top_emojis)
-                report_lines.append(f"{i}. <@{user_id}>: {stats['received']} reactions received")
+                report_lines.append(f"{i}. {username}: {stats['received']} reactions received")
                 report_lines.append(f"   Most received: {emoji_str}")
             report_lines.append("")
 
